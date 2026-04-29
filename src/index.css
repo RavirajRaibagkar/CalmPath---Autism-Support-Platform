@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-primary: #8DE4D0;
+  --color-brand-secondary: #FFD4A3;
+  --color-brand-accent: #B4B9FC;
+  --color-soft-bg: #F8FAFC;
+  --color-calm-blue: #D1E9FF;
+  --color-soft-peach: #FFF1E6;
+}
+
+@layer base {
+  body {
+    @apply bg-soft-bg text-slate-800 font-sans antialiased;
+  }
+}
+
+.glass {
+  @apply bg-white/70 backdrop-blur-md border border-white/20 shadow-xl;
+}
+
+.card-hover {
+  @apply transition-all duration-300 hover:shadow-2xl hover:-translate-y-1;
+}
+
+.btn-primary {
+  @apply px-6 py-3 bg-brand-primary text-slate-900 font-semibold rounded-2xl shadow-lg transition-transform active:scale-95 hover:brightness-105;
+}
+
+.btn-secondary {
+  @apply px-6 py-3 bg-brand-secondary text-slate-900 font-semibold rounded-2xl shadow-lg transition-transform active:scale-95 hover:brightness-105;
+}
+
+.btn-accent {
+  @apply px-6 py-3 bg-brand-accent text-slate-900 font-semibold rounded-2xl shadow-lg transition-transform active:scale-95 hover:brightness-105;
+}
+
+/* breathing animation */
+@keyframes breathe {
+  0%, 100% { transform: scale(1); opacity: 0.8; }
+  50% { transform: scale(1.15); opacity: 1; }
+}
+
+.animate-breathe {
+  animation: breathe 4s ease-in-out infinite;
+}

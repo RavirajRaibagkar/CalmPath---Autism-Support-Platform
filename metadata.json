@@ -1,0 +1,12 @@
+{
+  "name": "CalmPath",
+  "description": "An emotion-aware learning platform designed for autism support, featuring real-time emotion detection, focus tracking, and AI-powered insights.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "AI-powered learning assistant",
+    "Real-time emotion tracking",
+    "Parent-child collaborative dashboard"
+  ]
+}

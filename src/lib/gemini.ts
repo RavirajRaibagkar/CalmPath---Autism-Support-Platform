@@ -20,19 +20,30 @@ export async function askGemini(prompt: string, context: string = "") {
 
 export async function generateReportSummary(childData: any, period: string) {
   try {
-    const prompt = `Generate a ${period} progress report based on this data: ${JSON.stringify(childData)}. 
-    Include:
-    1. Focus trends (duration, distractions, tab switching)
-    2. Emotional landscape summary
-    3. Notable anomalies
-    4. 3 educational recommendations.
-    Format the output in clear Markdown.`;
+    const prompt = `Generate a highly professional and empathetic ${period} progress report for a parent.
+    
+    Data Context:
+    - Student: ${childData.profile.name}
+    - Total Focus Time: ${Math.round(childData.stats.totalFocusTime / 60)} minutes
+    - Distraction Count: ${childData.stats.distraction_count}
+    - Tab Switches (indicative of focus shifts): ${childData.stats.tabSwitches}
+    - Recent Emotions: ${childData.emotions.slice(0, 50).map((e: any) => e.emotion).join(', ')}
+    
+    Detailed Sessions: ${JSON.stringify(childData.sessions.slice(0, 10))}
+
+    Please provide:
+    1. **Executive Summary**: A warm overview of how ${childData.profile.name} performed.
+    2. **Behavioral Patterns**: Analyze focus vs. distraction. Look for correlations (e.g., sessions with high focus vs. specific times or tasks).
+    3. **Emotional Well-being**: Summarize the predominant moods and any distress signals (Looking Away, Sad, Angry).
+    4. **Actionable Recommendations**: 3 specific, supportive tips for the parent to try (e.g., 'Try shorter sessions with sensory breaks' or 'Introduce visual schedules').
+    
+    Format in beautiful Clean Markdown with headers and bullet points. Avoid medical diagnoses, but focus on behavioral support.`;
     
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: prompt,
       config: {
-        systemInstruction: "You are an expert behavior analyst. Analyze the child's learning data and provide a constructive, supportive report for parents. Focus on patterns and growth.",
+        systemInstruction: "You are a lead behavioral psychologist and educational consultant. Your tone is professional, deeply empathetic, and data-informed. You specialize in neurodiversity and child development.",
       },
     });
     return response.text;
@@ -42,8 +53,24 @@ export async function generateReportSummary(childData: any, period: string) {
   }
 }
 
+let lastEmotionAnalysisTime = 0;
+let quotaExhaustedUntil = 0;
+const MIN_EMOTION_INTERVAL = 30000; // 30 seconds
+const QUOTA_COOLDOWN = 60000; // 1 minute cooldown if quota hit
+
 export async function analyzeEmotion(frameBase64: string) {
+  const now = Date.now();
+  
+  if (now < quotaExhaustedUntil) {
+    return { emotion: null, confidence: 0 };
+  }
+
+  if (now - lastEmotionAnalysisTime < MIN_EMOTION_INTERVAL) {
+    return { emotion: null, confidence: 0 };
+  }
+
   try {
+    lastEmotionAnalysisTime = now;
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: {
@@ -66,9 +93,14 @@ export async function analyzeEmotion(frameBase64: string) {
       emotion: emotion.includes('looking_away') ? 'looking_away' : emotion,
       confidence: 0.95
     };
-  } catch (error) {
-    console.error("Emotion Analysis Error:", error);
-    return { emotion: "neutral", confidence: 0.5 };
+  } catch (error: any) {
+    // If we hit a rate limit, enter cooldown
+    if (error?.message?.includes('429') || error?.message?.includes('quota')) {
+      console.warn("AI Quota reached. Entering 60s cooldown...");
+      quotaExhaustedUntil = Date.now() + QUOTA_COOLDOWN;
+    }
+    console.warn("Emotion Analysis skipped:", error?.message);
+    return { emotion: null, confidence: 0 };
   }
 }
 

@@ -25,11 +25,15 @@ export default function ParentDashboard({ profile, user }: Props) {
   const [events, setEvents] = useState<FocusEvent[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
   const [activeTab, setActiveTab] = useState<'overview' | 'reports' | 'chat'>('overview');
+  const [liveFrame, setLiveFrame] = useState<string | null>(null);
+  const [isLive, setIsLive] = useState(false);
   
   // Form states
   const [inviteEmail, setInviteEmail] = useState('');
   const [taskTitle, setTaskTitle] = useState('');
   const [taskUrl, setTaskUrl] = useState('');
+  const [taskRefLink, setTaskRefLink] = useState('');
+  const [taskNotes, setTaskNotes] = useState('');
   const [loading, setLoading] = useState(false);
   const [insights, setInsights] = useState<string | null>(null);
   const [insightsLoading, setInsightsLoading] = useState(false);
@@ -65,11 +69,23 @@ export default function ParentDashboard({ profile, user }: Props) {
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'emotion_samples', filter: `child_id=eq.${selectedChild.id}` }, fetchChildData)
         .subscribe();
 
+      // Live monitoring broadcast subscription
+      const liveSub = supabase.channel(`live-${selectedChild.id}`)
+        .on('broadcast', { event: 'video-frame' }, (payload) => {
+          setLiveFrame(payload.payload.frame);
+          setIsLive(true);
+          // Auto-clear live status if no frames for 5 seconds
+          const timer = setTimeout(() => setIsLive(false), 5000);
+          return () => clearTimeout(timer);
+        })
+        .subscribe();
+
       return () => {
         tasksSub.unsubscribe();
         sessionsSub.unsubscribe();
         eventsSub.unsubscribe();
         samplesSub.unsubscribe();
+        liveSub.unsubscribe();
       };
     }
   }, [selectedChild]);
@@ -145,12 +161,16 @@ export default function ParentDashboard({ profile, user }: Props) {
       child_id: selectedChild.id,
       assigned_by: profile.id,
       title: taskTitle,
-      url: taskUrl
+      url: taskUrl,
+      reference_link: taskRefLink || null,
+      notes: taskNotes || null
     });
 
     if (!error) {
       setTaskTitle('');
       setTaskUrl('');
+      setTaskRefLink('');
+      setTaskNotes('');
       fetchChildData();
     }
     setLoading(false);
@@ -172,11 +192,27 @@ export default function ParentDashboard({ profile, user }: Props) {
     if (!selectedChild) return;
     setReportLoading(true);
     
+    const now = new Date();
+    let periodStart = new Date();
+    
+    if (type === 'daily') periodStart.setDate(now.getDate() - 1);
+    else if (type === 'weekly') periodStart.setDate(now.getDate() - 7);
+    else if (type === 'monthly') periodStart.setMonth(now.getMonth() - 1);
+
+    const filteredSessions = sessions.filter(s => new Date(s.start_time) >= periodStart);
+    const filteredEmotions = emotionSamples.filter(s => new Date(s.timestamp) >= periodStart);
+    const filteredEvents = events.filter(e => new Date(e.created_at) >= periodStart);
+    
     const summary = {
       profile: selectedChild,
-      sessions: sessions.slice(0, 50),
-      emotions: emotionSamples.slice(0, 200),
-      events: events.slice(0, 100)
+      sessions: filteredSessions,
+      emotions: filteredEmotions,
+      events: filteredEvents,
+      stats: {
+        totalFocusTime: filteredSessions.reduce((acc, s) => acc + s.focus_duration, 0),
+        distractionCount: filteredSessions.reduce((acc, s) => acc + s.distraction_count, 0),
+        tabSwitches: filteredEvents.filter(e => e.event_type === 'tab_switch').length,
+      }
     };
     
     const content = await generateReportSummary(summary, type);
@@ -186,12 +222,20 @@ export default function ParentDashboard({ profile, user }: Props) {
       generated_by: profile.id,
       report_type: type,
       content,
-      period_start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-      period_end: new Date().toISOString()
+      period_start: periodStart.toISOString(),
+      period_end: now.toISOString()
     });
     
     if (!error) fetchChildData();
+    else alert('Failed to save report: ' + error.message);
+    
     setReportLoading(false);
+  }
+
+  async function handleDeleteReport(id: string) {
+    if (!confirm('Are you sure you want to delete this report?')) return;
+    const { error } = await supabase.from('reports').delete().eq('id', id);
+    if (!error) fetchChildData();
   }
 
   async function handleChat(e: React.FormEvent) {
@@ -301,9 +345,9 @@ export default function ParentDashboard({ profile, user }: Props) {
               exit={{ opacity: 0, y: -10 }}
               className="grid grid-cols-1 lg:grid-cols-12 gap-8"
             >
-          {/* Overview Stats */}
-          <div className="lg:col-span-8 space-y-8">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {/* Main Dashboard Layout */}
+          <div className="lg:col-span-12 space-y-8">
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
               {[
                 { label: 'Completed', value: completedTasks, icon: CheckCircle, color: 'text-brand-primary' },
                 { label: 'Avg Focus', value: `${Math.round(totalFocusTime / 60)}m`, icon: Clock, color: 'text-brand-accent' },
@@ -311,133 +355,215 @@ export default function ParentDashboard({ profile, user }: Props) {
                 { label: 'Breaks', value: sessions.reduce((acc, s) => acc + s.break_count, 0), icon: Coffee, color: 'text-brand-secondary' },
                 { label: 'Last Mood', value: lastEmotion, icon: Smile, color: 'text-green-500' }
               ].map((stat, i) => (
-                <div key={i} className="glass p-6 rounded-[32px] text-center space-y-2">
-                  <stat.icon className={`w-6 h-6 mx-auto ${stat.color}`} />
-                  <p className="text-2xl font-bold">{stat.value}</p>
-                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest leading-tight">{stat.label}</p>
+                <div key={i} className="glass p-6 rounded-[32px] text-center space-y-2 group hover:scale-105 transition-all cursor-default">
+                  <stat.icon className={`w-8 h-8 mx-auto ${stat.color} group-hover:animate-bounce`} />
+                  <p className="text-2xl font-black text-slate-800 tracking-tight">{stat.value}</p>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] leading-tight">{stat.label}</p>
                 </div>
               ))}
             </div>
 
-            {/* Live Feed & Alerts */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <div className="glass p-8 rounded-[40px] space-y-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-xl font-bold">Focus & Behavior Live</h3>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                      <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Live Syncing</span>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+              {/* Left Column: Live Stream & Behavioral Log */}
+              <div className="lg:col-span-8 space-y-8">
+                {/* Live Webcam Section */}
+                <div className="glass p-8 rounded-[40px] space-y-6 relative overflow-hidden group">
+                  <div className="flex items-center justify-between relative z-10">
+                    <div>
+                      <h3 className="text-2xl font-black text-slate-800">Remote Live Feed</h3>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-red-500 animate-pulse' : 'bg-slate-300'}`} />
+                        <span className="text-xs font-bold text-slate-400 uppercase tracking-widest font-mono">
+                          {isLive ? 'Ephemeral Broadcast Active' : 'Waiting for student signal'}
+                        </span>
+                      </div>
+                    </div>
+                    {isLive && (
+                      <div className="flex items-center gap-2 bg-red-500 text-white px-4 py-1.5 rounded-full shadow-lg shadow-red-500/20">
+                        <div className="w-1.5 h-1.5 bg-white rounded-full animate-ping" />
+                        <span className="text-[10px] font-black uppercase tracking-widest">Live Monitor</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="aspect-video bg-slate-900 rounded-[32px] overflow-hidden relative border-8 border-white/5 shadow-inner group">
+                    {liveFrame ? (
+                      <motion.img 
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        src={liveFrame} 
+                        alt="Live Stream" 
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-12 space-y-6">
+                        <div className="w-20 h-20 bg-slate-800 rounded-full flex items-center justify-center">
+                          <Layout className="w-10 h-10 text-slate-600 animate-pulse" />
+                        </div>
+                        <div className="space-y-2">
+                          <p className="text-slate-200 font-bold text-lg">No active session</p>
+                          <p className="text-slate-500 text-sm max-w-xs mx-auto">This feed is only active while {selectedChild.name} is focusing. Video is transmitted point-to-point and is never saved to our servers.</p>
+                        </div>
+                      </div>
+                    )}
+                    {/* Overlay info */}
+                    {isLive && (
+                      <div className="absolute bottom-6 left-6 p-4 bg-black/40 backdrop-blur-md rounded-2xl border border-white/10">
+                        <p className="text-white font-bold text-sm tracking-tight">{selectedChild.name}</p>
+                        <p className="text-white/60 text-[10px] font-mono">Real-time Session Feed</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="glass p-8 rounded-[40px] space-y-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-2xl font-black text-slate-800">Behavioral Events</h3>
+                      <p className="text-xs font-bold text-slate-400 uppercase tracking-[0.1em] mt-1">Tab switches & Break activities</p>
+                    </div>
+                    <div className="p-3 bg-brand-primary/10 rounded-2xl">
+                      <RefreshCcw className="w-5 h-5 text-brand-primary" />
                     </div>
                   </div>
-                  <AlertTriangle className="text-orange-500" />
-                </div>
-                
-                <div className="space-y-4 max-h-[300px] overflow-y-auto pr-2">
-                  {events.length > 0 ? events.map(event => (
-                    <div key={event.id} className="flex gap-4 p-4 bg-slate-50/50 rounded-2xl border border-slate-100">
-                      <div className={`p-2 rounded-xl h-fit ${
-                        event.event_type === 'tab_switch' ? 'bg-orange-100 text-orange-500' :
-                        event.event_type === 'break_start' ? 'bg-blue-100 text-blue-500' :
-                        'bg-green-100 text-green-500'
-                      }`}>
-                        {event.event_type === 'tab_switch' ? <Layout className="w-4 h-4" /> : 
-                         event.event_type === 'break_start' ? <Coffee className="w-4 h-4" /> : 
-                         <RefreshCcw className="w-4 h-4" />}
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                    {events.length > 0 ? events.slice(0, 10).map(event => (
+                      <motion.div 
+                        initial={{ opacity: 0, x: -10 }}
+                        whileInView={{ opacity: 1, x: 0 }}
+                        key={event.id} 
+                        className="flex gap-4 p-5 bg-white/40 rounded-3xl border border-slate-100 hover:border-brand-primary transition-all group"
+                      >
+                        <div className={`p-3 rounded-2xl h-fit transition-transform group-hover:scale-110 ${
+                          event.event_type === 'tab_switch' ? 'bg-orange-100 text-orange-500' :
+                          event.event_type === 'break_start' ? 'bg-blue-100 text-blue-500' :
+                          'bg-green-100 text-green-500'
+                        }`}>
+                          {event.event_type === 'tab_switch' ? <Layout className="w-5 h-5" /> : 
+                           event.event_type === 'break_start' ? <Coffee className="w-5 h-5" /> : 
+                           <RefreshCcw className="w-5 h-5" />}
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-sm font-black text-slate-800 capitalize leading-none pt-1">
+                            {event.event_type.replace('_', ' ')}
+                          </p>
+                          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                            {new Date(event.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </p>
+                          {event.details?.task_title && (
+                            <p className="text-xs text-slate-500 italic mt-1 line-clamp-1">"{event.details.task_title}"</p>
+                          )}
+                        </div>
+                      </motion.div>
+                    )) : (
+                      <div className="col-span-full py-16 text-center text-slate-400">
+                        <Layout className="w-12 h-12 mx-auto mb-3 opacity-10" />
+                        <p className="text-sm font-bold uppercase tracking-widest">No activity reported</p>
                       </div>
-                      <div className="flex-1">
-                        <p className="text-sm font-bold capitalize">
-                          {event.event_type.replace('_', ' ')}
-                        </p>
-                        <p className="text-xs text-slate-400">
-                          {new Date(event.created_at).toLocaleTimeString()}
-                          {event.details?.task_title && ` • ${event.details.task_title}`}
-                        </p>
-                      </div>
-                    </div>
-                  )) : (
-                    <div className="h-full flex flex-col items-center justify-center text-slate-400 py-12 text-center">
-                      <Layout className="w-12 h-12 mb-2 opacity-10" />
-                      <p>No behavior events detected.</p>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
 
-              <div className="glass p-8 rounded-[40px] space-y-6">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xl font-bold">Emotion Summary</h3>
-                  <TrendingUp className="text-brand-primary" />
+              {/* Right Column: Mood & Insights */}
+              <div className="lg:col-span-4 space-y-8">
+                <div className="glass p-8 rounded-[40px] space-y-8">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-2xl font-black text-slate-800">Mood Analytics</h3>
+                    <TrendingUp className="text-brand-primary w-6 h-6" />
+                  </div>
+                  <div className="h-[300px] min-w-0 relative">
+                    {emotionData.length > 0 ? (
+                      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+                        <PieChart>
+                          <Pie
+                            data={emotionData}
+                            innerRadius={70}
+                            outerRadius={100}
+                            paddingAngle={8}
+                            dataKey="value"
+                            stroke="none"
+                          >
+                            {emotionData.map((_entry: any, index: number) => (
+                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip 
+                            contentStyle={{ borderRadius: '24px', border: 'none', padding: '16px', boxShadow: '0 20px 40px -10px rgba(0,0,0,0.1)' }}
+                            itemStyle={{ fontWeight: 'bold', textTransform: 'capitalize' }}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-4">
+                        <Smile className="w-12 h-12 opacity-10" />
+                        <p className="text-sm font-bold uppercase tracking-widest">Pending Emotion Data</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="h-[300px] min-w-0">
-                  {emotionData.length > 0 ? (
-                    <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-                      <PieChart>
-                        <Pie
-                          data={emotionData}
-                          innerRadius={60}
-                          outerRadius={80}
-                          paddingAngle={5}
-                          dataKey="value"
-                        >
-                          {emotionData.map((entry: any, index: number) => (
-                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="h-full flex items-center justify-center text-slate-400">No samples yet</div>
-                  )}
-                </div>
-              </div>
 
-              <div className="glass p-8 rounded-[40px] space-y-6">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xl font-bold">Smart Insights</h3>
-                  <button onClick={generateInsights} disabled={insightsLoading} className="text-brand-accent">
-                    {insightsLoading ? <Loader2 className="animate-spin" /> : <RefreshCcw className="w-5 h-5" />}
-                  </button>
-                </div>
-                <div className="min-h-[250px] text-sm text-slate-600 leading-relaxed">
-                  {insights ? (
-                    <Markdown>{insights}</Markdown>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center h-full text-slate-400 text-center py-12">
-                      <TrendingUp className="w-12 h-12 mb-4 opacity-10" />
-                      <p>Click the refresh button to generate AI insights based on {selectedChild.name}'s progress.</p>
-                    </div>
-                  )}
+                <div className="glass p-8 rounded-[40px] space-y-6">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xl font-bold">AI Counselor</h3>
+                    <button onClick={generateInsights} disabled={insightsLoading} className="p-2 bg-brand-accent/10 rounded-xl text-brand-accent hover:bg-brand-accent/20 transition-all">
+                      {insightsLoading ? <Loader2 className="animate-spin w-5 h-5" /> : <RefreshCcw className="w-5 h-5" />}
+                    </button>
+                  </div>
+                  <div className="prose prose-sm prose-slate max-w-none text-slate-600">
+                    {insights ? (
+                      <Markdown>{insights}</Markdown>
+                    ) : (
+                      <div className="py-12 text-center text-slate-400 space-y-4">
+                        <TrendingUp className="w-10 h-10 mx-auto opacity-10" />
+                        <p className="text-sm px-4">Generate instant behavioral patterns based on current session data.</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* Task Management */}
-            <div className="glass p-8 rounded-[40px] space-y-8">
+            {/* Task Assignments */}
+            <div className="glass p-12 rounded-[40px] space-y-8">
               <div className="flex items-center justify-between">
-                <h3 className="text-xl font-bold">Assigned Tasks</h3>
-                <ClipboardList className="text-brand-primary" />
+                <div>
+                  <h3 className="text-3xl font-black text-slate-800">Learning Path</h3>
+                  <p className="text-slate-500 font-medium">Manage and review educational materials for {selectedChild.name}.</p>
+                </div>
+                <div className="p-4 bg-brand-primary/10 rounded-3xl">
+                  <ClipboardList className="w-8 h-8 text-brand-primary" />
+                </div>
               </div>
 
-              <div className="space-y-4 max-h-[400px] overflow-y-auto pr-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-h-[600px] overflow-y-auto pr-4 custom-scrollbar">
                 {tasks.map(task => (
-                  <div key={task.id} className="flex items-center justify-between p-4 bg-white/50 rounded-2xl border border-slate-100">
-                    <div className="flex items-center gap-4">
+                  <motion.div 
+                    whileHover={{ y: -5 }}
+                    key={task.id} 
+                    className="flex flex-col p-6 bg-white/40 rounded-[32px] border border-slate-100 hover:border-brand-primary group transition-all"
+                  >
+                    <div className="flex justify-between items-start mb-4">
                       {task.is_completed ? (
-                        <CheckCircle className="text-brand-primary" />
+                        <div className="bg-brand-primary/20 text-brand-primary p-2 rounded-xl">
+                          <CheckCircle className="w-5 h-5" />
+                        </div>
                       ) : (
-                        <Clock className="text-slate-300" />
+                        <div className="bg-slate-100 text-slate-400 p-2 rounded-xl">
+                          <Clock className="w-5 h-5" />
+                        </div>
                       )}
-                      <div>
-                        <p className={`font-bold ${task.is_completed ? 'line-through text-slate-400' : ''}`}>{task.title}</p>
-                        <p className="text-xs text-brand-accent truncate max-w-[200px]">{task.url}</p>
-                      </div>
+                      <a href={task.url} target="_blank" rel="noreferrer" className="p-2 text-slate-300 hover:text-brand-accent transition-colors">
+                        <ExternalLink className="w-5 h-5" />
+                      </a>
                     </div>
-                    <div className="flex gap-2">
-                       <a href={task.url} target="_blank" rel="noreferrer" className="p-2 hover:bg-white rounded-lg"><ExternalLink className="w-4 h-4" /></a>
-                    </div>
-                  </div>
+                    <h4 className={`text-lg font-black text-slate-800 leading-tight mb-2 ${task.is_completed ? 'line-through opacity-40' : ''}`}>
+                      {task.title}
+                    </h4>
+                    <p className="text-xs text-brand-accent font-bold truncate mt-auto">{task.url}</p>
+                  </motion.div>
                 ))}
               </div>
             </div>
@@ -468,6 +594,25 @@ export default function ParentDashboard({ profile, user }: Props) {
                     value={taskUrl}
                     onChange={e => setTaskUrl(e.target.value)}
                     required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-400 uppercase">Reference Link (YouTube)</label>
+                  <input 
+                    type="url" 
+                    placeholder="https://youtube.com/..." 
+                    className="w-full bg-white rounded-xl px-4 py-3 border border-slate-100"
+                    value={taskRefLink}
+                    onChange={e => setTaskRefLink(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-400 uppercase">Session Notes / Instructions</label>
+                  <textarea 
+                    placeholder="Add special notes for this session..." 
+                    className="w-full bg-white rounded-xl px-4 py-3 border border-slate-100 min-h-[100px] resize-none"
+                    value={taskNotes}
+                    onChange={e => setTaskNotes(e.target.value)}
                   />
                 </div>
                 <button type="submit" disabled={loading} className="w-full btn-primary">
@@ -544,7 +689,13 @@ export default function ParentDashboard({ profile, user }: Props) {
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 {reports.map(report => (
-                  <div key={report.id} className="glass p-8 rounded-[40px] space-y-4">
+                   <div key={report.id} className="glass p-8 rounded-[40px] space-y-4 relative group">
+                    <button 
+                      onClick={() => handleDeleteReport(report.id)}
+                      className="absolute top-6 right-6 p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
                     <div className="flex justify-between items-start">
                       <div className="flex items-center gap-3">
                         <div className="p-3 bg-brand-primary/20 rounded-2xl text-brand-primary">
@@ -552,7 +703,9 @@ export default function ParentDashboard({ profile, user }: Props) {
                         </div>
                         <div>
                           <h4 className="font-bold capitalize">{report.report_type} Report</h4>
-                          <p className="text-xs text-slate-400">{new Date(report.created_at).toLocaleDateString()}</p>
+                          <p className="text-xs text-slate-400">
+                            {new Date(report.period_start).toLocaleDateString()} - {new Date(report.period_end).toLocaleDateString()}
+                          </p>
                         </div>
                       </div>
                     </div>

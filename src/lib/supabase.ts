@@ -27,6 +27,8 @@ export type Task = {
   assigned_by: string;
   title: string;
   url: string;
+  reference_link: string | null;
+  notes: string | null;
   is_completed: boolean;
   completed_at: string | null;
   created_at: string;
@@ -71,4 +73,13 @@ export type Report = {
   period_start: string;
   period_end: string;
   created_at: string;
+};
+
+export type ChildNote = {
+  id: string;
+  user_id: string;
+  task_id: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
 };

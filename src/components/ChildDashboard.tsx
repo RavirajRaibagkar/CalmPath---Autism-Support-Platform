@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { supabase, type UserProfile, type Task } from '../lib/supabase';
+import { supabase, type UserProfile, type Task, type Quiz, type QuizQuestion, type QuizSubmission } from '../lib/supabase';
 import { askGemini } from '../lib/gemini';
 import { motion, AnimatePresence } from 'motion/react';
 import * as faceapi from 'face-api.js';
 import { 
   Play, Pause, RefreshCcw, MessageCircle, LogOut, 
   CheckCircle2, Clock, Brain, Coffee, Send, ChevronRight,
-  Smile, Frown, Meh, AlertCircle, Eye, EyeOff, BookOpen, StickyNote
+  Smile, Frown, Meh, AlertCircle, Eye, EyeOff, BookOpen, StickyNote, HelpCircle, ArrowLeft, ArrowRight, Loader2
 } from 'lucide-react';
 import CalmSpace from './CalmSpace';
 import Markdown from 'react-markdown';
@@ -36,6 +36,15 @@ export default function ChildDashboard({ profile, user }: Props) {
   const [webcamError, setWebcamError] = useState<string | null>(null);
   const [childNote, setChildNote] = useState('');
   const [isSavingNote, setIsSavingNote] = useState(false);
+
+  // Quiz states
+  const [quizzes, setQuizzes] = useState<Quiz[]>([]);
+  const [activeQuiz, setActiveQuiz] = useState<(Quiz & { questions: QuizQuestion[] }) | null>(null);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [quizAnswers, setQuizAnswers] = useState<number[]>([]);
+  const [quizTimer, setQuizTimer] = useState(0);
+  const [isSubmittingQuiz, setIsSubmittingQuiz] = useState(false);
+  const [quizResult, setQuizResult] = useState<{score: number, total: number} | null>(null);
 
   // Video Ref for distraction detection
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -90,6 +99,7 @@ export default function ChildDashboard({ profile, user }: Props) {
     loadModels();
     initWebcam();
     fetchTasks();
+    fetchQuizzes();
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     const interval = setInterval(() => {
@@ -217,6 +227,74 @@ export default function ChildDashboard({ profile, user }: Props) {
       .order('created_at', { ascending: false });
     if (data) setTasks(data);
   }
+
+  async function fetchQuizzes() {
+    const { data } = await supabase
+      .from('quizzes')
+      .select('*')
+      .eq('child_id', profile.id)
+      .eq('is_completed', false)
+      .order('created_at', { ascending: false });
+    if (data) setQuizzes(data);
+  }
+
+  async function startQuiz(quiz: Quiz) {
+    const { data: questions } = await supabase
+      .from('quiz_questions')
+      .select('*')
+      .eq('quiz_id', quiz.id)
+      .order('id', { ascending: true });
+    
+    if (questions) {
+      setActiveQuiz({ ...quiz, questions });
+      setQuizTimer(quiz.time_limit_minutes * 60);
+      setCurrentQuestionIndex(0);
+      setQuizAnswers(new Array(questions.length).fill(-1));
+      setQuizResult(null);
+    }
+  }
+
+  async function submitQuiz() {
+    if (!activeQuiz) return;
+    setIsSubmittingQuiz(true);
+    
+    let score = 0;
+    activeQuiz.questions.forEach((q, i) => {
+      if (quizAnswers[i] === q.correct_option_index) score++;
+    });
+
+    try {
+      await supabase.from('quiz_submissions').insert({
+        quiz_id: activeQuiz.id,
+        child_id: profile.id,
+        score,
+        total_questions: activeQuiz.questions.length
+      });
+
+      setQuizResult({ score, total: activeQuiz.questions.length });
+      fetchQuizzes();
+    } catch (err) {
+      console.error("Quiz submission error:", err);
+    } finally {
+      setIsSubmittingQuiz(false);
+    }
+  }
+
+  useEffect(() => {
+    let qInterval: any;
+    if (activeQuiz && quizTimer > 0 && !quizResult) {
+      qInterval = setInterval(() => {
+        setQuizTimer(t => {
+          if (t <= 1) {
+            submitQuiz();
+            return 0;
+          }
+          return t - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(qInterval);
+  }, [activeQuiz, quizTimer, quizResult]);
 
   async function logEmotion(emo: string, confidence: number = 0.9) {
     if (!sessionId) return;
@@ -355,29 +433,51 @@ export default function ChildDashboard({ profile, user }: Props) {
             </div>
           </div>
           
-          <nav className="space-y-1">
-            <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4 px-2">My Tasks</h3>
-            <div className="space-y-2 max-h-[60vh] overflow-y-auto px-1 custom-scrollbar">
-              {tasks.filter(t => !t.is_completed).map(task => (
-                <motion.button
-                  key={task.id}
-                  whileHover={{ scale: 1.01 }}
-                  whileTap={{ scale: 0.99 }}
-                  onClick={() => startSession(task)}
-                  className={`w-full p-3 rounded-xl border transition-all text-left group ${currentTask?.id === task.id ? 'border-brand-primary bg-brand-primary/5 ring-1 ring-brand-primary/20' : 'border-slate-100 bg-white hover:border-brand-primary/30'}`}
-                >
-                  <p className="font-bold text-xs text-slate-700 truncate">{task.title}</p>
-                  <div className={`flex items-center gap-1.5 mt-2 text-[10px] ${currentTask?.id === task.id ? 'text-brand-primary' : 'text-slate-400'}`}>
-                    <Play className="w-2.5 h-2.5" /> Start Learning
+          <nav className="space-y-6">
+            <div className="space-y-1">
+              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4 px-2">My Tasks</h3>
+              <div className="space-y-2 max-h-[30vh] overflow-y-auto px-1 custom-scrollbar">
+                {tasks.filter(t => !t.is_completed).map(task => (
+                  <motion.button
+                    key={task.id}
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.99 }}
+                    onClick={() => startSession(task)}
+                    className={`w-full p-3 rounded-xl border transition-all text-left group ${currentTask?.id === task.id ? 'border-brand-primary bg-brand-primary/5 ring-1 ring-brand-primary/20' : 'border-slate-100 bg-white hover:border-brand-primary/30'}`}
+                  >
+                    <p className="font-bold text-xs text-slate-700 truncate">{task.title}</p>
+                    <div className={`flex items-center gap-1.5 mt-2 text-[10px] ${currentTask?.id === task.id ? 'text-brand-primary' : 'text-slate-400'}`}>
+                      <Play className="w-2.5 h-2.5" /> Start Learning
+                    </div>
+                  </motion.button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4 px-2">My Quizzes</h3>
+              <div className="space-y-2 max-h-[30vh] overflow-y-auto px-1 custom-scrollbar">
+                {quizzes.map(quiz => (
+                  <motion.button
+                    key={quiz.id}
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.99 }}
+                    onClick={() => startQuiz(quiz)}
+                    className="w-full p-3 rounded-xl border border-brand-accent/20 bg-brand-accent/5 hover:bg-brand-accent/10 transition-all text-left group"
+                  >
+                    <p className="font-bold text-xs text-slate-700 truncate">{quiz.title}</p>
+                    <div className="flex items-center gap-1.5 mt-2 text-[10px] text-brand-accent">
+                      <HelpCircle className="w-2.5 h-2.5" /> Start Quiz ({quiz.time_limit_minutes}m)
+                    </div>
+                  </motion.button>
+                ))}
+                {quizzes.length === 0 && (
+                  <div className="p-4 text-center text-slate-300">
+                    <CheckCircle2 className="w-6 h-6 mx-auto mb-2 opacity-20" />
+                    <p className="text-[10px]">No quizzes yet</p>
                   </div>
-                </motion.button>
-              ))}
-              {tasks.filter(t => !t.is_completed).length === 0 && (
-                <div className="p-4 text-center text-slate-300">
-                  <CheckCircle2 className="w-6 h-6 mx-auto mb-2 opacity-20" />
-                  <p className="text-[10px]">All done!</p>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </nav>
         </div>
@@ -611,6 +711,182 @@ export default function ChildDashboard({ profile, user }: Props) {
               logEvent('break_end');
             }} 
           />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {activeQuiz && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-slate-900/95 backdrop-blur-2xl flex items-center justify-center p-4 lg:p-8"
+          >
+            <div className="w-full max-w-2xl glass p-8 lg:p-10 rounded-[48px] space-y-8 relative overflow-hidden bg-white/95 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)]">
+              {/* Animated Progress Bar at the top */}
+              {!quizResult && (
+                <div className="absolute top-0 left-0 w-full h-2 bg-slate-100">
+                  <motion.div 
+                    className="h-full bg-brand-primary"
+                    initial={{ width: 0 }}
+                    animate={{ width: `${((currentQuestionIndex + 1) / activeQuiz.questions.length) * 100}%` }}
+                    transition={{ type: 'spring', stiffness: 50, damping: 20 }}
+                  />
+                </div>
+              )}
+
+              {!quizResult ? (
+                <>
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-1">
+                      <h2 className="text-2xl font-black text-slate-800 tracking-tight">{activeQuiz.title}</h2>
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 bg-brand-primary/10 text-brand-primary rounded-md text-[10px] font-bold uppercase tracking-wider">Question {currentQuestionIndex + 1}</span>
+                        <span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">{activeQuiz.questions.length} Total</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end">
+                      <motion.div 
+                        animate={quizTimer < 30 ? { scale: [1, 1.1, 1], color: ['#6366f1', '#ef4444', '#6366f1'] } : {}}
+                        transition={{ repeat: Infinity, duration: 1 }}
+                        className="text-3xl font-mono font-black text-brand-accent tabular-nums"
+                      >
+                        {formatTime(quizTimer)}
+                      </motion.div>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Time Left</p>
+                    </div>
+                  </div>
+
+                  <AnimatePresence mode="wait">
+                    <motion.div
+                      key={currentQuestionIndex}
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -20 }}
+                      transition={{ duration: 0.3 }}
+                      className="space-y-8"
+                    >
+                      <div className="p-10 bg-slate-50/80 rounded-[32px] border border-slate-100 min-h-[180px] flex items-center justify-center relative overflow-hidden group">
+                        <div className="absolute top-4 left-4 text-slate-200">
+                          <HelpCircle className="w-12 h-12 rotate-[-15deg] group-hover:rotate-0 transition-transform duration-500" />
+                        </div>
+                        <h3 className="text-xl md:text-2xl font-bold text-slate-800 text-center leading-tight relative z-10">
+                          {activeQuiz.questions[currentQuestionIndex].question_text}
+                        </h3>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3">
+                        {activeQuiz.questions[currentQuestionIndex].options.map((option, idx) => (
+                          <motion.button
+                            key={idx}
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: idx * 0.1 }}
+                            onClick={() => {
+                              const newAnswers = [...quizAnswers];
+                              newAnswers[currentQuestionIndex] = idx;
+                              setQuizAnswers(newAnswers);
+                            }}
+                            className={`p-5 rounded-[28px] border-2 transition-all group flex items-center gap-4 text-sm font-bold text-left relative overflow-hidden ${quizAnswers[currentQuestionIndex] === idx ? 'border-brand-primary bg-brand-primary/5 text-brand-primary shadow-lg shadow-brand-primary/10 ring-4 ring-brand-primary/5' : 'border-slate-100 bg-white hover:border-brand-primary/30 text-slate-700'}`}
+                          >
+                            <span className={`w-10 h-10 rounded-2xl flex items-center justify-center text-xs transition-colors shrink-0 ${quizAnswers[currentQuestionIndex] === idx ? 'bg-brand-primary text-white' : 'bg-slate-50 text-slate-400 group-hover:bg-brand-primary/10 group-hover:text-brand-primary'}`}>
+                              {String.fromCharCode(65 + idx)}
+                            </span>
+                            <span className="flex-1">{option}</span>
+                            {quizAnswers[currentQuestionIndex] === idx && (
+                              <motion.div 
+                                layoutId="check"
+                                className="w-2 h-2 rounded-full bg-brand-primary"
+                              />
+                            )}
+                          </motion.button>
+                        ))}
+                      </div>
+                    </motion.div>
+                  </AnimatePresence>
+
+                  <div className="flex items-center justify-between pt-4">
+                    <button 
+                      onClick={() => setCurrentQuestionIndex(prev => Math.max(0, prev - 1))}
+                      disabled={currentQuestionIndex === 0}
+                      className="px-6 py-3 text-slate-400 font-bold flex items-center gap-2 hover:text-slate-600 disabled:opacity-0 transition-all text-xs uppercase tracking-widest"
+                    >
+                      <ArrowLeft className="w-4 h-4" /> Previous
+                    </button>
+
+                    {currentQuestionIndex === activeQuiz.questions.length - 1 ? (
+                      <button 
+                        onClick={submitQuiz}
+                        disabled={isSubmittingQuiz || quizAnswers.includes(-1)}
+                        className="bg-brand-primary text-white rounded-[24px] px-12 py-4 font-black shadow-[0_12px_24px_-8px_rgba(99,102,241,0.5)] hover:scale-105 active:scale-95 transition-all text-sm flex items-center gap-2 group disabled:opacity-50 disabled:grayscale"
+                      >
+                        {isSubmittingQuiz ? <Loader2 className="animate-spin" /> : <>Complete Quiz <CheckCircle2 className="w-5 h-5 group-hover:scale-110 transition-transform" /></>}
+                      </button>
+                    ) : (
+                      <button 
+                        onClick={() => setCurrentQuestionIndex(prev => Math.min(activeQuiz.questions.length - 1, prev + 1))}
+                        className="bg-brand-primary text-white rounded-[24px] px-8 py-4 font-black shadow-[0_12px_24px_-8px_rgba(99,102,241,0.5)] hover:scale-105 active:scale-95 transition-all text-sm flex items-center gap-2 group"
+                      >
+                        Next Question <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                      </button>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <motion.div 
+                  initial={{ scale: 0.9, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  className="text-center space-y-10 py-8"
+                >
+                  <div className="relative inline-block">
+                    <div className="w-32 h-32 bg-emerald-500 text-white rounded-[40px] flex items-center justify-center mx-auto shadow-2xl shadow-emerald-200 rotate-12">
+                      <CheckCircle2 className="w-16 h-16" />
+                    </div>
+                    <motion.div 
+                      initial={{ scale: 0 }} 
+                      animate={{ scale: 1 }} 
+                      transition={{ delay: 0.5 }}
+                      className="absolute -bottom-4 -right-4 bg-brand-accent text-white px-4 py-2 rounded-2xl font-black text-xs shadow-lg"
+                    >
+                      EXCELLENT!
+                    </motion.div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <h2 className="text-5xl font-black text-slate-800 tracking-tight">Quiz Complete!</h2>
+                    <p className="text-slate-400 font-bold uppercase tracking-widest text-sm">Amazing work, {profile.name}!</p>
+                  </div>
+
+                  <div className="bg-slate-50/50 rounded-[40px] p-8 border border-slate-100">
+                    <div className="text-8xl font-black text-emerald-500 tracking-tighter tabular-nums">
+                      {quizResult.score}<span className="text-slate-200 font-light mx-1">/</span>{quizResult.total}
+                    </div>
+                    <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-4">Questions Answered Correctly</div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="p-4 bg-white rounded-3xl border border-slate-100 flex flex-col items-center">
+                      <Clock className="w-6 h-6 text-brand-primary mb-2" />
+                      <span className="text-lg font-bold text-slate-800">{formatTime((activeQuiz.time_limit_minutes * 60) - quizTimer)}</span>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">Time Used</span>
+                    </div>
+                    <div className="p-4 bg-white rounded-3xl border border-slate-100 flex flex-col items-center">
+                      <Brain className="w-6 h-6 text-brand-primary mb-2" />
+                      <span className="text-lg font-bold text-slate-800">{Math.round((quizResult.score / quizResult.total) * 100)}%</span>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">Accuracy</span>
+                    </div>
+                  </div>
+
+                  <button 
+                    onClick={() => setActiveQuiz(null)}
+                    className="w-full bg-slate-900 text-white py-6 rounded-[32px] text-lg font-black shadow-2xl shadow-slate-200 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                  >
+                    Return to Library
+                  </button>
+                </motion.div>
+              )}
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>

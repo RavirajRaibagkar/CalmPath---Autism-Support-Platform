@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { supabase, type UserProfile, type Task, type EmotionSample, type FocusSession, type FocusEvent, type Report } from '../lib/supabase';
+import { supabase, type UserProfile, type Task, type EmotionSample, type FocusSession, type FocusEvent, type Report, type Quiz, type QuizQuestion, type QuizSubmission } from '../lib/supabase';
 import { getParentInsights, generateReportSummary, askGemini } from '../lib/gemini';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Users, Plus, ClipboardList, TrendingUp, AlertTriangle, 
   CheckCircle, Clock, Coffee, Smile, Send, Loader2,
   Trash2, ExternalLink, RefreshCcw, LogOut, FileText,
-  Calendar, Layout, ChevronRight, MessageSquare
+  Calendar, Layout, ChevronRight, MessageSquare, BrainCircuit, HelpCircle, Gamepad
 } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import Markdown from 'react-markdown';
@@ -24,7 +24,8 @@ export default function ParentDashboard({ profile, user }: Props) {
   const [sessions, setSessions] = useState<FocusSession[]>([]);
   const [events, setEvents] = useState<FocusEvent[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'reports' | 'chat'>('overview');
+  const [quizzes, setQuizzes] = useState<(Quiz & { questions_count: number, submissions: QuizSubmission[] })[]>([]);
+  const [activeTab, setActiveTab] = useState<'overview' | 'reports' | 'quizzes' | 'chat'>('overview');
   const [liveFrame, setLiveFrame] = useState<string | null>(null);
   const [isLive, setIsLive] = useState(false);
   
@@ -43,6 +44,13 @@ export default function ParentDashboard({ profile, user }: Props) {
   const [chatMessages, setChatMessages] = useState<{role: 'user' | 'bot', text: string}[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
+
+  // Quiz Form states
+  const [quizTitle, setQuizTitle] = useState('');
+  const [quizTime, setQuizTime] = useState(10);
+  const [quizQuestions, setQuizQuestions] = useState<{text: string, options: string[], correct: number}[]>([
+    { text: '', options: ['', '', '', ''], correct: 0 }
+  ]);
 
   useEffect(() => {
     fetchRelationships();
@@ -106,12 +114,13 @@ export default function ParentDashboard({ profile, user }: Props) {
   async function fetchChildData() {
     if (!selectedChild) return;
 
-    const [tasksRes, samplesRes, sessionsRes, eventsRes, reportsRes] = await Promise.all([
+    const [tasksRes, samplesRes, sessionsRes, eventsRes, reportsRes, quizzesRes] = await Promise.all([
       supabase.from('tasks').select('*').eq('child_id', selectedChild.id).order('created_at', { ascending: false }),
       supabase.from('emotion_samples').select('*').eq('child_id', selectedChild.id).order('timestamp', { ascending: false }).limit(100),
       supabase.from('focus_sessions').select('*').eq('child_id', selectedChild.id).order('created_at', { ascending: false }),
       supabase.from('focus_events').select('*').eq('child_id', selectedChild.id).order('created_at', { ascending: false }).limit(50),
-      supabase.from('reports').select('*').eq('child_id', selectedChild.id).order('created_at', { ascending: false })
+      supabase.from('reports').select('*').eq('child_id', selectedChild.id).order('created_at', { ascending: false }),
+      supabase.from('quizzes').select('*, quiz_questions(count), quiz_submissions(*)').eq('child_id', selectedChild.id).order('created_at', { ascending: false })
     ]);
 
     if (tasksRes.data) setTasks(tasksRes.data);
@@ -119,6 +128,13 @@ export default function ParentDashboard({ profile, user }: Props) {
     if (sessionsRes.data) setSessions(sessionsRes.data);
     if (eventsRes.data) setEvents(eventsRes.data);
     if (reportsRes.data) setReports(reportsRes.data);
+    if (quizzesRes.data) {
+      setQuizzes(quizzesRes.data.map((q: any) => ({
+        ...q,
+        questions_count: q.quiz_questions?.[0]?.count || 0,
+        submissions: q.quiz_submissions || []
+      })));
+    }
   }
 
   async function handleInvite() {
@@ -258,7 +274,47 @@ export default function ParentDashboard({ profile, user }: Props) {
     setChatLoading(false);
   }
 
-  // Stats calculation
+  async function handleCreateQuiz(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedChild || !quizTitle) return;
+    setLoading(true);
+
+    try {
+      const { data: quiz, error: quizError } = await supabase.from('quizzes').insert({
+        child_id: selectedChild.id,
+        assigned_by: profile.id,
+        title: quizTitle,
+        time_limit_minutes: quizTime
+      }).select().single();
+
+      if (quizError) throw quizError;
+
+      const questionsToAdd = quizQuestions.map(q => ({
+        quiz_id: quiz.id,
+        question_text: q.text,
+        options: q.options,
+        correct_option_index: q.correct
+      }));
+
+      const { error: questionsError } = await supabase.from('quiz_questions').insert(questionsToAdd);
+      if (questionsError) throw questionsError;
+
+      setQuizTitle('');
+      setQuizQuestions([{ text: '', options: ['', '', '', ''], correct: 0 }]);
+      fetchChildData();
+      alert('Quiz created successfully!');
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDeleteQuiz(id: string) {
+    if (!confirm('Are you sure you want to delete this quiz?')) return;
+    const { error } = await supabase.from('quizzes').delete().eq('id', id);
+    if (!error) fetchChildData();
+  }
   const completedTasks = tasks.filter(t => t.is_completed).length;
   const totalFocusTime = sessions.reduce((acc, s) => acc + s.focus_duration, 0);
   const lastEmotion = emotionSamples[0]?.emotion || 'Unknown';
@@ -321,6 +377,7 @@ export default function ParentDashboard({ profile, user }: Props) {
       <div className="flex gap-4 border-b border-slate-100">
         {[
           { id: 'overview', label: 'Overview', icon: Layout },
+          { id: 'quizzes', label: 'Quizzes', icon: BrainCircuit },
           { id: 'reports', label: 'Reports', icon: FileText },
           { id: 'chat', label: 'AI Consultant', icon: MessageSquare }
         ].map(tab => (
@@ -658,6 +715,157 @@ export default function ParentDashboard({ profile, user }: Props) {
             </div>
           </motion.div>
         )}
+
+          {activeTab === 'quizzes' && (
+            <motion.div 
+              key="quizzes"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="grid grid-cols-1 lg:grid-cols-12 gap-8"
+            >
+              <div className="lg:col-span-8 space-y-6">
+                <div className="glass p-8 rounded-[40px] space-y-6">
+                  <h3 className="text-2xl font-black text-slate-800">Assigned Quizzes</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {quizzes.map(quiz => (
+                      <div key={quiz.id} className="p-6 bg-white/50 rounded-3xl border border-slate-100 flex flex-col group relative">
+                        <button 
+                          onClick={() => handleDeleteQuiz(quiz.id)}
+                          className="absolute top-4 right-4 p-2 text-slate-300 hover:text-red-500 transition-all opacity-0 group-hover:opacity-100"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                        <div className="flex items-center gap-3 mb-4">
+                          <div className={`p-3 rounded-2xl ${quiz.is_completed ? 'bg-emerald-100 text-emerald-600' : 'bg-brand-primary/10 text-brand-primary'}`}>
+                            <HelpCircle className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="font-bold text-slate-800">{quiz.title}</h4>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{quiz.questions_count} Questions • {quiz.time_limit_minutes}m</p>
+                          </div>
+                        </div>
+                        
+                        {quiz.submissions.length > 0 ? (
+                          <div className="mt-auto space-y-2">
+                            <div className="flex justify-between text-xs font-bold">
+                              <span className="text-slate-400">Best Score</span>
+                              <span className="text-emerald-500">{quiz.submissions[0].score}/{quiz.submissions[0].total_questions}</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-emerald-500" 
+                                style={{ width: `${(quiz.submissions[0].score / quiz.submissions[0].total_questions) * 100}%` }}
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mt-auto text-xs text-slate-400 italic">Not taken yet</div>
+                        )}
+                      </div>
+                    ))}
+                    {quizzes.length === 0 && (
+                      <div className="col-span-full py-12 text-center text-slate-300">
+                        <BrainCircuit className="w-12 h-12 mx-auto mb-3 opacity-10" />
+                        <p>No quizzes created yet.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="lg:col-span-4 bg-white/50 glass rounded-[40px] p-8 space-y-6">
+                <h3 className="text-xl font-bold">Create New Quiz</h3>
+                <form onSubmit={handleCreateQuiz} className="space-y-6">
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase px-1">Quiz Title</label>
+                      <input 
+                        type="text" 
+                        className="w-full bg-white rounded-xl px-4 py-3 border border-slate-100 text-sm"
+                        placeholder="e.g., Weekly Math Quiz"
+                        value={quizTitle}
+                        onChange={e => setQuizTitle(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase px-1">Time Limit (mins)</label>
+                      <input 
+                        type="number" 
+                        className="w-full bg-white rounded-xl px-4 py-3 border border-slate-100 text-sm"
+                        value={quizTime}
+                        onChange={e => setQuizTime(Number(e.target.value))}
+                        min={1}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center px-1">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase">Questions</label>
+                      <button 
+                        type="button"
+                        onClick={() => setQuizQuestions([...quizQuestions, { text: '', options: ['', '', '', ''], correct: 0 }])}
+                        className="text-brand-primary text-xs font-bold hover:underline"
+                      >
+                        + Add Question
+                      </button>
+                    </div>
+
+                    <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                      {quizQuestions.map((q, qIndex) => (
+                        <div key={qIndex} className="p-4 bg-white rounded-2xl border border-slate-100 space-y-3">
+                          <input 
+                            placeholder={`Question ${qIndex + 1}`}
+                            className="w-full text-xs font-bold text-slate-700 bg-slate-50 rounded-lg px-3 py-2 border-none"
+                            value={q.text}
+                            onChange={e => {
+                              const newQs = [...quizQuestions];
+                              newQs[qIndex].text = e.target.value;
+                              setQuizQuestions(newQs);
+                            }}
+                            required
+                          />
+                          <div className="grid grid-cols-2 gap-2">
+                            {q.options.map((opt, oIndex) => (
+                              <div key={oIndex} className="flex items-center gap-2">
+                                <input 
+                                  type="radio" 
+                                  name={`correct-${qIndex}`}
+                                  checked={q.correct === oIndex}
+                                  onChange={() => {
+                                    const newQs = [...quizQuestions];
+                                    newQs[qIndex].correct = oIndex;
+                                    setQuizQuestions(newQs);
+                                  }}
+                                />
+                                <input 
+                                  placeholder={`Option ${oIndex + 1}`}
+                                  className="w-full text-[10px] bg-slate-50 rounded-lg px-2 py-1.5 border-none"
+                                  value={opt}
+                                  onChange={e => {
+                                    const newQs = [...quizQuestions];
+                                    newQs[qIndex].options[oIndex] = e.target.value;
+                                    setQuizQuestions(newQs);
+                                  }}
+                                  required
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button type="submit" disabled={loading} className="w-full btn-primary py-4 text-sm">
+                    {loading ? <Loader2 className="animate-spin mx-auto" /> : 'Settle Quiz'}
+                  </button>
+                </form>
+              </div>
+            </motion.div>
+          )}
 
           {activeTab === 'reports' && (
             <motion.div 

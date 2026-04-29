@@ -83,3 +83,31 @@ export type ChildNote = {
   created_at: string;
   updated_at: string;
 };
+
+export type Quiz = {
+  id: string;
+  assigned_by: string;
+  child_id: string;
+  title: string;
+  description: string | null;
+  time_limit_minutes: number;
+  is_completed: boolean;
+  created_at: string;
+};
+
+export type QuizQuestion = {
+  id: string;
+  quiz_id: string;
+  question_text: string;
+  options: string[];
+  correct_option_index: number;
+};
+
+export type QuizSubmission = {
+  id: string;
+  quiz_id: string;
+  child_id: string;
+  score: number;
+  total_questions: number;
+  completed_at: string;
+};

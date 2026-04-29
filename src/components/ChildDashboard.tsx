@@ -390,7 +390,14 @@ export default function ChildDashboard({ profile, user }: Props) {
     setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
     setLoadingChat(true);
 
-    const reply = await askGemini(userMsg, `The student's current emotion is ${emotion}.`);
+    let reply = '';
+    try {
+      reply = await askGemini(userMsg, `The student's current emotion is ${emotion}.`);
+    } catch (err: any) {
+      console.error("Student AI Chat Error:", err);
+      reply = "I'm here for you! I'm currently thinking very hard, but remember: you're doing great. Take a deep breath and keep going—you've got this! (My wisdom is temporarily limited, but my support isn't!)";
+    }
+    
     setMessages(prev => [...prev, { role: 'bot', text: reply }]);
     setLoadingChat(false);
 
@@ -482,147 +489,181 @@ export default function ChildDashboard({ profile, user }: Props) {
           </nav>
         </div>
 
-        <div className="mt-auto p-4 border-t border-slate-50">
+        <div className="mt-auto p-6 border-t border-slate-50 bg-slate-50/30">
           <button 
             onClick={() => supabase.auth.signOut()}
-            className="w-full p-3 rounded-xl flex items-center gap-3 text-slate-500 hover:bg-slate-100 hover:text-red-500 transition-all text-xs font-bold"
+            className="w-full p-4 rounded-2xl flex items-center gap-3 text-slate-400 hover:bg-red-50 hover:text-red-500 transition-all text-sm font-black uppercase tracking-widest group"
           >
-            <LogOut className="w-4 h-4" /> Sign Out
+            <div className="p-2 bg-white rounded-xl shadow-sm group-hover:bg-red-100 transition-colors">
+              <LogOut className="w-4 h-4" />
+            </div> 
+            Sign Out
           </button>
         </div>
       </aside>
 
       {/* MAIN CONTENT - Video & Notes */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden">
+      <main className="flex-1 flex flex-col h-full bg-slate-50/30 overflow-hidden">
         {/* Top Header/Stats */}
-        <header className="px-8 py-3 bg-white border-b border-slate-100 flex items-center justify-between">
-          <div className="flex items-center gap-6">
+        <header className="px-8 py-4 bg-white/80 backdrop-blur-xl border-b border-slate-100 flex items-center justify-between z-10">
+          <div className="flex items-center gap-8">
             <div className="flex flex-col">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Session Time</span>
-              <span className="text-lg font-mono font-bold text-brand-accent">{formatTime(timer)}</span>
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-1">Concentration</span>
+              <span className="text-xl font-mono font-black text-brand-primary tabular-nums">{formatTime(timer)}</span>
             </div>
-            <div className="w-px h-6 bg-slate-100" />
+            <div className="w-px h-8 bg-slate-100" />
             <div className="flex flex-col">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Active Emotion</span>
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-1">Emotion State</span>
               <div className="flex items-center gap-2">
-                <Smile className="w-4 h-4 text-brand-primary" />
-                <span className="text-sm font-bold text-slate-700">{emotion}</span>
+                <div className={`p-1 rounded-lg ${
+                  emotion === 'Happy' ? 'bg-green-100 text-green-600' :
+                  emotion === 'Focused' ? 'bg-blue-100 text-blue-600' :
+                  emotion === 'Looking Away' ? 'bg-orange-100 text-orange-600' :
+                  'bg-slate-100 text-slate-500'
+                }`}>
+                  <Brain className="w-4 h-4" />
+                </div>
+                <span className="text-sm font-black text-slate-700">{emotion}</span>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-4">
             <button 
               onClick={() => {
                 setIsBreak(true);
                 logEvent('break_start');
-                if (sessionId) {
-                  supabase.from('focus_sessions').select('break_count').eq('id', sessionId).single().then(({data}) => {
-                    if (data) supabase.from('focus_sessions').update({ break_count: (data.break_count || 0) + 1 }).eq('id', sessionId);
-                  });
-                }
               }}
-              className="px-4 py-2 bg-brand-primary/10 text-brand-primary rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-brand-primary hover:text-white transition-all shadow-sm"
+              className="px-6 py-2.5 bg-white border-2 border-brand-primary/20 text-brand-primary rounded-2xl text-[11px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-brand-primary hover:text-white hover:border-brand-primary transition-all shadow-sm"
             >
-              <Coffee className="w-4 h-4" /> I Need a Break
+              <Coffee className="w-4 h-4" /> Take a Break
             </button>
             <button 
               onClick={completeTask}
               disabled={!currentTask}
-              className="px-4 py-2 bg-brand-primary text-white rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-brand-primary-dark transition-all shadow-md shadow-brand-primary/20 disabled:opacity-50 disabled:grayscale"
+              className="px-6 py-2.5 bg-brand-primary text-white rounded-2xl text-[11px] font-black uppercase tracking-widest flex items-center gap-2 hover:scale-105 active:scale-95 transition-all shadow-xl shadow-brand-primary/25 disabled:opacity-50 disabled:grayscale disabled:scale-100"
             >
-              <CheckCircle2 className="w-4 h-4" /> Mark as Done
+              <CheckCircle2 className="w-4 h-4" /> Finish Task
             </button>
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-4 lg:p-6 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-6 lg:p-10 custom-scrollbar space-y-10">
           {webcamError && (
             <motion.div 
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex items-center gap-3 p-3 bg-red-50 border border-red-100 rounded-xl text-red-600 text-xs mb-4"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="flex items-center gap-4 p-5 bg-red-50 border-2 border-red-100 rounded-3xl text-red-600 shadow-lg shadow-red-500/5"
             >
-              <AlertCircle className="w-4 h-4" />
-              <p>{webcamError}</p>
+              <div className="p-3 bg-white rounded-2xl shadow-sm">
+                <AlertCircle className="w-5 h-5 text-red-500" />
+              </div>
+              <div>
+                <p className="font-black text-sm uppercase tracking-tight">Camera Correction Needed</p>
+                <p className="text-xs font-bold opacity-80">{webcamError}</p>
+              </div>
             </motion.div>
           )}
 
           {currentTask ? (
-            <div className="space-y-6">
-              {/* Video Player - Large (Approx 50% width effectively) */}
-              <div className="glass rounded-[32px] overflow-hidden bg-slate-900 shadow-2xl shadow-slate-200/50 relative group">
-                <video ref={videoRef} autoPlay playsInline muted className="hidden" />
-                <canvas ref={canvasRef} className="hidden" />
-                
-                <div className="aspect-video w-full max-h-[60vh]">
-                  {currentTask.url && !isBreak ? (
-                    <iframe 
-                      className="w-full h-full"
-                      src={`https://www.youtube.com/embed/${getYoutubeId(currentTask.url)}?autoplay=1&mute=0&rel=0&modestbranding=1`}
-                      title="Learning Video"
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                      allowFullScreen
-                    ></iframe>
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-white flex-col gap-4">
-                      {isBreak ? (
-                        <>
-                          <Coffee className="w-12 h-12 text-brand-primary animate-bounce" />
-                          <p className="text-xl font-bold">Taking a break...</p>
-                        </>
-                      ) : (
-                        <p className="text-slate-400">Video URL not provided</p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Bottom Section: Notes Grid */}
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                {/* Child's Study Notes */}
-                <div className="xl:col-span-1 flex flex-col gap-3">
-                  <div className="flex items-center justify-between px-2">
-                    <div className="flex items-center gap-2">
-                      <StickyNote className="w-4 h-4 text-brand-accent" />
-                      <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">My Study Notes</h3>
-                    </div>
-                    {isSavingNote && <span className="text-[10px] text-brand-primary animate-pulse italic">Saving...</span>}
+            <div className="max-w-[1200px] mx-auto space-y-10">
+              {/* Immersive Video Player */}
+              <motion.div 
+                layoutId={`video-${currentTask.id}`}
+                className="group relative"
+              >
+                <div className="absolute -inset-4 bg-brand-primary/5 rounded-[48px] blur-2xl group-hover:bg-brand-primary/10 transition-all" />
+                <div className="relative glass rounded-[44px] overflow-hidden bg-slate-900 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.2)] border-8 border-white/50">
+                  <video ref={videoRef} autoPlay playsInline muted className="hidden" />
+                  <canvas ref={canvasRef} className="hidden" />
+                  
+                  <div className="aspect-video w-full h-full min-h-[60vh] max-h-[75vh]">
+                    {currentTask.url && !isBreak ? (
+                      <iframe 
+                        className="w-full h-full"
+                        src={`https://www.youtube.com/embed/${getYoutubeId(currentTask.url)}?autoplay=1&mute=0&rel=0&modestbranding=1&showinfo=0`}
+                        title="Learning Video"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                      ></iframe>
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-white flex-col gap-6">
+                        {isBreak ? (
+                          <motion.div 
+                            initial={{ scale: 0.8 }}
+                            animate={{ scale: 1 }}
+                            className="text-center"
+                          >
+                            <div className="w-24 h-24 bg-brand-primary/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                              <Coffee className="w-12 h-12 text-brand-primary animate-pulse" />
+                            </div>
+                            <h3 className="text-3xl font-black tracking-tight">Time for a Calm Break</h3>
+                            <p className="text-slate-400 font-bold mt-2">The video is paused while you recharge.</p>
+                          </motion.div>
+                        ) : (
+                          <AlertCircle className="w-12 h-12 text-slate-700" />
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <div className="glass p-4 rounded-3xl min-h-[300px] flex flex-col bg-white/40">
+                </div>
+              </motion.div>
+
+              {/* Study Tools Section */}
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
+                {/* Writing Pad */}
+                <div className="xl:col-span-7 space-y-4">
+                  <div className="flex items-center justify-between px-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-brand-accent/10 rounded-xl">
+                        <StickyNote className="w-4 h-4 text-brand-accent" />
+                      </div>
+                      <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest">Interactive Study Pad</h3>
+                    </div>
+                    {isSavingNote && (
+                      <div className="flex items-center gap-2 text-[10px] text-brand-primary font-black uppercase tracking-tighter">
+                        <Loader2 className="w-3 h-3 animate-spin" /> Saving Progress
+                      </div>
+                    )}
+                  </div>
+                  <div className="glass p-8 rounded-[40px] bg-white/60 shadow-xl shadow-slate-200/50 min-h-[400px] flex flex-col relative">
+                    <div className="absolute top-8 left-8 bottom-8 w-px bg-slate-100 hidden md:block" />
                     <textarea 
-                      className="flex-1 bg-transparent border-none focus:ring-0 text-sm text-slate-600 resize-none placeholder:text-slate-300 leading-relaxed custom-scrollbar"
-                      placeholder="Write your notes here while you learn..."
+                      className="flex-1 bg-transparent border-none focus:ring-0 text-lg text-slate-700 resize-none placeholder:text-slate-300 leading-relaxed custom-scrollbar md:pl-10 font-medium"
+                      placeholder="Capture your thoughts and key learnings here..."
                       value={childNote}
                       onChange={(e) => setChildNote(e.target.value)}
                     />
                   </div>
                 </div>
 
-                {/* Parent's Instructions & Reference Video */}
-                <div className="xl:col-span-2 space-y-6">
-                  {/* Parent Notes */}
+                {/* Resource Hub */}
+                <div className="xl:col-span-5 space-y-8">
+                  {/* Guidance */}
                   {currentTask.notes && (
-                    <div className="space-y-3">
-                      <div className="flex items-center gap-2 px-2">
-                        <Brain className="w-4 h-4 text-brand-primary" />
-                        <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Parent's Guidance</h3>
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-3 px-4">
+                        <div className="p-2 bg-brand-primary/10 rounded-xl">
+                          <Brain className="w-4 h-4 text-brand-primary" />
+                        </div>
+                        <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest">Mission Protocol</h3>
                       </div>
-                      <div className="glass p-5 rounded-3xl bg-blue-50/30 border-blue-100/20 text-slate-600 text-sm leading-relaxed">
-                        {currentTask.notes}
+                      <div className="glass p-8 rounded-[40px] bg-brand-primary/5 border-2 border-brand-primary/10 text-slate-700 font-bold leading-relaxed shadow-lg shadow-brand-primary/5 italic">
+                        "{currentTask.notes}"
                       </div>
                     </div>
                   )}
 
-                  {/* Reference Video */}
+                  {/* Reference */}
                   {currentTask.reference_link && (
-                    <div className="space-y-3">
-                      <div className="flex items-center gap-2 px-2">
-                        <Eye className="w-4 h-4 text-brand-accent" />
-                        <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Recommended Video</h3>
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-3 px-4">
+                        <div className="p-2 bg-brand-accent/10 rounded-xl">
+                          <Eye className="w-4 h-4 text-brand-accent" />
+                        </div>
+                        <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest">Support Resource</h3>
                       </div>
-                      <div className="glass overflow-hidden rounded-3xl bg-slate-900/5 aspect-video max-w-md border border-slate-100">
+                      <div className="glass overflow-hidden rounded-[40px] shadow-2xl shadow-slate-200/50 aspect-video border-4 border-white">
                         <iframe 
                           className="w-full h-full"
                           src={`https://www.youtube.com/embed/${getYoutubeId(currentTask.reference_link)}`}

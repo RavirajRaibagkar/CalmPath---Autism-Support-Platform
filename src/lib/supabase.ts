@@ -70,6 +70,8 @@ export type Report = {
   generated_by: string;
   report_type: 'daily' | 'weekly' | 'monthly';
   content: string;
+  focus_score: number | null;
+  emotion_summary: any | null;
   period_start: string;
   period_end: string;
   created_at: string;

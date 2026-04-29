@@ -273,14 +273,19 @@ ${Object.entries(
       generated_by: profile.id,
       report_type: type,
       content,
-      focus_score: focusScore,
-      emotion_summary: emoSummary,
+      focus_score: Math.round(focusScore),
+      emotion_summary: JSON.parse(JSON.stringify(emoSummary)), // Ensure plain object for JSONB
       period_start: periodStart.toISOString(),
       period_end: now.toISOString()
     });
     
-    if (!error) fetchChildData();
-    else alert('Failed to save report: ' + error.message);
+    if (!error) {
+      alert('Report saved successfully!');
+      fetchChildData();
+    } else {
+      console.error('Report Save Error:', error);
+      alert(`Failed to save report: ${error.message}. Check if 'focus_score' and 'emotion_summary' columns exist in your 'reports' table.`);
+    }
     
     setReportLoading(false);
   }
@@ -549,7 +554,7 @@ ${Object.entries(
                         <h3 className="text-xl font-bold">Assign New Task</h3>
                         <form onSubmit={handleAddTask} className="space-y-4">
                           <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Lesson Title</label>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Task Name</label>
                             <input 
                               type="text" 
                               placeholder="e.g., Intro to Math" 
@@ -560,7 +565,7 @@ ${Object.entries(
                             />
                           </div>
                           <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">YouTube URL</label>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">youtube url</label>
                             <input 
                               type="url" 
                               placeholder="https://youtube.com/..." 
@@ -571,7 +576,7 @@ ${Object.entries(
                             />
                           </div>
                           <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Reference Link (YouTube)</label>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">reference url</label>
                             <input 
                               type="url" 
                               placeholder="Secondary resource..." 
@@ -581,7 +586,7 @@ ${Object.entries(
                             />
                           </div>
                           <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Session Notes</label>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Notes for child</label>
                             <textarea 
                               placeholder="Instructions for the student..." 
                               className="w-full bg-white rounded-xl px-4 py-3 border border-slate-100 text-sm min-h-[100px] resize-none"

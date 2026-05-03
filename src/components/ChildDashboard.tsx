@@ -18,7 +18,8 @@ interface Props {
   user: any;
 }
 
-const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights/';
+const MODEL_URL = '/models'; // Locally served from public/models — faster & reliable
+
 
 export default function ChildDashboard({ profile, user }: Props) {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -54,15 +55,32 @@ export default function ChildDashboard({ profile, user }: Props) {
   const [isDistracted, setIsDistracted] = useState(false);
   const missedFramesRef = useRef(0);
 
+  // Refs for stale-closure-safe access inside intervals
+  const isActiveRef = useRef(false);
+  const isBreakRef = useRef(false);
+  const isTabActiveRef = useRef(true);
+  const modelsLoadedRef = useRef(false);
+  const distractionTimerRef = useRef(0);
+  const sessionIdRef = useRef<string | null>(null);
+
+  useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
+  useEffect(() => { isBreakRef.current = isBreak; }, [isBreak]);
+  useEffect(() => { isTabActiveRef.current = isTabActive; }, [isTabActive]);
+  useEffect(() => { modelsLoadedRef.current = modelsLoaded; }, [modelsLoaded]);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+
+  // One-time setup: load models, webcam, tasks, quizzes
   useEffect(() => {
     async function loadModels() {
       console.log("Loading face models from:", MODEL_URL);
       try {
         await Promise.all([
-          faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+          faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
           faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL),
         ]);
         setModelsLoaded(true);
+        modelsLoadedRef.current = true;
       } catch (err) {
         console.warn("Face model load failed:", err);
       }
@@ -72,9 +90,16 @@ export default function ChildDashboard({ profile, user }: Props) {
     
     async function initWebcam() {
       try {
-        currentStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        if (videoRef.current) videoRef.current.srcObject = currentStream;
+        currentStream = await navigator.mediaDevices.getUserMedia({ 
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' } 
+        });
+        if (videoRef.current) {
+          videoRef.current.srcObject = currentStream;
+          // Explicitly play to ensure readyState advances for face-api
+          await videoRef.current.play().catch(() => {/* autoplay blocked — user interaction needed */});
+        }
         setWebcamError(null);
+        console.log("✅ Webcam initialized");
       } catch (err: any) {
         console.error("Webcam error:", err);
         if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
@@ -88,10 +113,10 @@ export default function ChildDashboard({ profile, user }: Props) {
     const handleVisibilityChange = () => {
       const hidden = document.hidden;
       setIsTabActive(!hidden);
-      if (hidden && isActive && !isBreak) {
+      isTabActiveRef.current = !hidden;
+      if (hidden && isActiveRef.current && !isBreakRef.current) {
         logEvent('tab_switch', { 
-          timestamp: new Date().toISOString(),
-          task_title: currentTask?.title 
+          timestamp: new Date().toISOString()
         });
       }
     };
@@ -102,103 +127,116 @@ export default function ChildDashboard({ profile, user }: Props) {
     fetchQuizzes();
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    const interval = setInterval(() => {
-      if (isActive && !isBreak) {
-        // Handle Distraction (Tab Focus context)
-        if (!isTabActive) {
-          setDistractionTimer(prev => prev + 1);
-          setIsDistracted(true);
-          if (distractionTimer > 10) {
-            logDistraction();
-          }
-        } else {
-          setDistractionTimer(0);
-        }
-
-        // Increment Focus Time only if models are active and not currently considered distracted
-        if (modelsLoaded && !isDistracted && isTabActive) {
-          setTimer(t => t + 1);
-        }
-
-        // Perform facial analysis every second for accurate focus tracking
-        captureAndAnalyze();
-      }
-    }, 1000);
-
     return () => {
-      clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (currentStream) {
         currentStream.getTracks().forEach(track => track.stop());
       }
     };
-  }, [isActive, isBreak, distractionTimer, timer, isTabActive]);
+  }, []); // Run only once on mount
+
+  // Ticker: runs every second, uses refs to avoid stale closures
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!isActiveRef.current || isBreakRef.current) return;
+
+      // Always increment timer when active and not on break
+      setTimer(t => t + 1);
+
+      // Handle tab-switch based distraction
+      if (!isTabActiveRef.current) {
+        distractionTimerRef.current += 1;
+        setDistractionTimer(distractionTimerRef.current);
+        setIsDistracted(true);
+        if (distractionTimerRef.current > 10) {
+          logDistraction();
+          distractionTimerRef.current = 0; // reset to avoid repeated calls
+        }
+      } else {
+        distractionTimerRef.current = 0;
+        setDistractionTimer(0);
+      }
+
+      // Perform facial analysis if models are ready
+      if (modelsLoadedRef.current) {
+        captureAndAnalyze();
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []); // Run only once - uses refs for current values
+
 
   async function captureAndAnalyze() {
-    if (!videoRef.current || !canvasRef.current || !isActive || isBreak) return;
+    if (!videoRef.current || !canvasRef.current || !isActiveRef.current || isBreakRef.current) return;
 
     const video = videoRef.current;
-    
-    // 1. Snapshot Frame (Internal use only if needed)
+
+    // Guard: video must be fully loaded and playing before running face detection
+    if (video.readyState < 2 || video.videoWidth === 0) return;
+
+    // Snapshot Frame onto hidden canvas
     const canvas = canvasRef.current;
-    canvas.width = 300;
-    canvas.height = 225;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      ctx.drawImage(video, 0, 0, 300, 225);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     }
 
-    // 2. Perform Local Analysis if models are ready
-    if (!modelsLoaded) return;
+    // Run face detection only when models are ready (use ref, not stale state)
+    if (!modelsLoadedRef.current) return;
 
     try {
-      // SSD Mobilenet v1 is much more accurate than TinyFaceDetector
-      // It handles varying distances and lighting better, reducing false "Looking Away"
-      const options = new faceapi.SsdMobilenetv1Options({
-        minConfidence: 0.4 
-      });
+      const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 });
+      const detections = await faceapi.detectSingleFace(video, options).withFaceLandmarks(true).withFaceExpressions();
 
-      const detections = await faceapi.detectSingleFace(video, options).withFaceExpressions();
-      
       if (detections) {
-        missedFramesRef.current = 0; // Reset counter on successful detection
+        missedFramesRef.current = 0;
         const expressions = detections.expressions;
-        const sorted = Object.entries(expressions).sort(([,a], [,b]) => (b as number) - (a as number));
+        const sorted = Object.entries(expressions).sort(([, a], [, b]) => (b as number) - (a as number));
         const topEmotion = sorted[0][0];
-        const confidence = (sorted[0][1] as number);
+        const confidence = sorted[0][1] as number;
         const formattedEmo = topEmotion.charAt(0).toUpperCase() + topEmotion.slice(1);
-        
-        if (formattedEmo !== emotion) {
-          setEmotion(formattedEmo);
-          logEmotion(formattedEmo, confidence);
-        }
+
+        setEmotion(prev => {
+          if (formattedEmo !== prev) {
+            logEmotion(formattedEmo, confidence);
+            return formattedEmo;
+          }
+          return prev;
+        });
         setIsDistracted(false);
       } else {
-        // Face not detected in this frame
+        // Face not detected
         missedFramesRef.current += 1;
 
-        // Only switch to 'Looking Away' if it fails for 5 consecutive seconds (increased smoothing)
+        // Only flag as distracted after 5 consecutive missed frames
         if (missedFramesRef.current >= 5) {
-          if (emotion !== 'Looking Away') {
-            setEmotion('Looking Away');
-            setIsDistracted(true);
-            logEmotion('Looking Away');
-          }
+          setEmotion(prev => {
+            if (prev !== 'Looking Away') {
+              logEmotion('Looking Away');
+              return 'Looking Away';
+            }
+            return prev;
+          });
+          setIsDistracted(true);
         }
       }
     } catch (err) {
-      console.warn("Local analysis error:", err);
+      console.error("====== Face analysis error ======", err);
     }
   }
 
+
   async function logDistraction() {
-    if (!sessionId) return;
+    if (!sessionIdRef.current) return;
     try {
-      const { data: session } = await supabase.from('focus_sessions').select('distraction_count').eq('id', sessionId).single();
+      const { data: session } = await supabase.from('focus_sessions').select('distraction_count').eq('id', sessionIdRef.current).single();
       if (session) {
         await supabase.from('focus_sessions').update({ 
           distraction_count: (session.distraction_count || 0) + 1 
-        }).eq('id', sessionId);
+        }).eq('id', sessionIdRef.current);
       }
     } catch (err) {
       console.error("Log distraction error:", err);
@@ -210,9 +248,9 @@ export default function ChildDashboard({ profile, user }: Props) {
     try {
       await supabase.from('focus_events').insert({
         child_id: profile.id,
-        session_id: sessionId,
+        session_id: sessionIdRef.current,
         event_type: type,
-        details
+        metadata: details  // DB column is 'metadata', not 'details'
       });
     } catch (err) {
       console.error("Log event error:", err);
@@ -297,11 +335,11 @@ export default function ChildDashboard({ profile, user }: Props) {
   }, [activeQuiz, quizTimer, quizResult]);
 
   async function logEmotion(emo: string, confidence: number = 0.9) {
-    if (!sessionId) return;
+    if (!sessionIdRef.current) return;
     try {
       const { error } = await supabase.from('emotion_samples').insert({
         child_id: profile.id,
-        session_id: sessionId,
+        session_id: sessionIdRef.current,
         emotion: emo,
         confidence
       });
@@ -314,6 +352,7 @@ export default function ChildDashboard({ profile, user }: Props) {
   async function startSession(task: Task) {
     setCurrentTask(task);
     setIsActive(true);
+    isActiveRef.current = true;
     setTimer(0);
     
     // Fetch child note for this task
@@ -322,7 +361,7 @@ export default function ChildDashboard({ profile, user }: Props) {
       .select('content')
       .eq('task_id', task.id)
       .eq('user_id', profile.id)
-      .single();
+      .maybeSingle();  // Use maybeSingle — no UNIQUE constraint, row may not exist
     
     setChildNote(noteData?.content || '');
 
@@ -331,23 +370,38 @@ export default function ChildDashboard({ profile, user }: Props) {
       task_id: task.id,
       start_time: new Date().toISOString()
     }).select().single();
-    if (data) setSessionId(data.id);
+    if (data) {
+      setSessionId(data.id);
+      sessionIdRef.current = data.id;
+    }
   }
 
   const debouncedSaveNote = useRef(
     debounce(async (content: string, taskId: string, userId: string) => {
       setIsSavingNote(true);
       try {
-        const { error } = await supabase
+        // Check if a note already exists for this task+user (no unique constraint in DB)
+        const { data: existing } = await supabase
           .from('child_notes')
-          .upsert({
-            task_id: taskId,
-            user_id: userId,
-            content: content,
-            updated_at: new Date().toISOString()
-          }, { onConflict: 'task_id,user_id' });
-        
-        if (error) console.error("Error saving note:", error);
+          .select('id')
+          .eq('task_id', taskId)
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (existing?.id) {
+          // Update existing note
+          const { error } = await supabase
+            .from('child_notes')
+            .update({ content, updated_at: new Date().toISOString() })
+            .eq('id', existing.id);
+          if (error) console.error("Error updating note:", error);
+        } else {
+          // Insert new note
+          const { error } = await supabase
+            .from('child_notes')
+            .insert({ task_id: taskId, user_id: userId, content });
+          if (error) console.error("Error inserting note:", error);
+        }
       } finally {
         setIsSavingNote(false);
       }
@@ -369,15 +423,18 @@ export default function ChildDashboard({ profile, user }: Props) {
       completed_at: new Date().toISOString() 
     }).eq('id', currentTask.id);
 
-    if (sessionId) {
+    if (sessionIdRef.current) {
       await supabase.from('focus_sessions').update({ 
         end_time: new Date().toISOString(),
         focus_duration: timer
-      }).eq('id', sessionId);
+      }).eq('id', sessionIdRef.current);
     }
 
     setCurrentTask(null);
     setIsActive(false);
+    isActiveRef.current = false;
+    setSessionId(null);
+    sessionIdRef.current = null;
     fetchTasks();
   }
 
@@ -424,6 +481,10 @@ export default function ChildDashboard({ profile, user }: Props) {
 
   return (
     <div className="max-w-[1600px] mx-auto h-screen flex flex-col lg:flex-row overflow-hidden bg-slate-50/50">
+      {/* Hidden elements for emotion detection */}
+      <video ref={videoRef} autoPlay playsInline muted className="hidden" />
+      <canvas ref={canvasRef} className="hidden" />
+      
       {/* LEFT SIDEBAR - Navigation & Tasks */}
       <aside className="w-full lg:w-72 flex flex-col bg-white border-r border-slate-100 h-full">
         <div className="p-6">
@@ -574,9 +635,6 @@ export default function ChildDashboard({ profile, user }: Props) {
               >
                 <div className="absolute -inset-4 bg-brand-primary/5 rounded-[48px] blur-2xl group-hover:bg-brand-primary/10 transition-all" />
                 <div className="relative glass rounded-[44px] overflow-hidden bg-slate-900 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.2)] border-8 border-white/50">
-                  <video ref={videoRef} autoPlay playsInline muted className="hidden" />
-                  <canvas ref={canvasRef} className="hidden" />
-                  
                   <div className="aspect-video w-full h-full min-h-[60vh] max-h-[75vh]">
                     {currentTask.url && !isBreak ? (
                       <iframe 

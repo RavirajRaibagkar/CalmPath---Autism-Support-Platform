@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY || '' });
 
 let quotaExhaustedUntil = 0;
 const QUOTA_COOLDOWN = 60000; // 1 minute cooldown
@@ -22,7 +22,7 @@ export async function askGemini(prompt: string, context: string = "") {
   try {
     checkQuota();
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: context ? `${context}\n\nUser Question: ${prompt}` : prompt,
       config: {
         systemInstruction: "You are CalmPath AI Assistant. For children: be patient, supportive, and use simple language. For parents: provide professional, data-driven insights. You clarify that you are an AI assistant and not a medical professional.",
@@ -44,14 +44,14 @@ export async function generateReportSummary(childData: any, period: string) {
     Data Context:
     - Student: ${childData.profile.name}
     - Total Focus Time: ${Math.round(childData.stats.totalFocusTime / 60)} minutes
-    - Distraction Count: ${childData.stats.distraction_count}
+    - Distraction Count: ${childData.stats.distractionCount}
     - Tab Switches: ${childData.stats.tabSwitches}
     - Recent Emotions: ${childData.emotions.slice(0, 50).map((e: any) => e.emotion).join(', ')}
     
     Format in Clean Markdown. Summarize executive summary, behavioral patterns, emotional well-being, and actionable recommendations.`;
     
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: prompt,
       config: {
         systemInstruction: "You are a lead behavioral psychologist. Tone is professional and empathetic.",
@@ -78,7 +78,7 @@ export async function analyzeEmotion(frameBase64: string) {
   try {
     lastEmotionAnalysisTime = now;
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: {
         parts: [
           {
@@ -111,7 +111,7 @@ export async function getParentInsights(childData: any) {
     checkQuota();
     const prompt = `Based on the following data for a child's learning session, provide a brief summary and 3 actionable insights/tips for the parent: \n${JSON.stringify(childData)}`;
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: prompt,
       config: {
         systemInstruction: "You are a professional educational consultant.",

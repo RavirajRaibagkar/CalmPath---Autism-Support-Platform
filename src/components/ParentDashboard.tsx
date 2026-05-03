@@ -56,6 +56,20 @@ export default function ParentDashboard({ profile, user }: Props) {
     fetchRelationships();
   }, []);
 
+  // Derived state - computed from state variables above
+  const completedTasks = tasks.filter(t => t.is_completed).length;
+  const totalFocusTime = sessions.reduce((acc, s) => acc + s.focus_duration, 0);
+  const lastEmotion = emotionSamples[0]?.emotion || 'Unknown';
+  
+  const emotionData = emotionSamples.reduce((acc: any, curr) => {
+    const existing = acc.find((a: any) => a.name === curr.emotion);
+    if (existing) existing.value++;
+    else acc.push({ name: curr.emotion, value: 1 });
+    return acc;
+  }, []);
+
+  const COLORS = ['#8DE4D0', '#FFD4A3', '#B4B9FC', '#D1E9FF', '#FFF1E6', '#FFB7B7'];
+
   useEffect(() => {
     if (selectedChild) {
       fetchChildData();
@@ -357,18 +371,6 @@ ${Object.entries(
     const { error } = await supabase.from('quizzes').delete().eq('id', id);
     if (!error) fetchChildData();
   }
-  const completedTasks = tasks.filter(t => t.is_completed).length;
-  const totalFocusTime = sessions.reduce((acc, s) => acc + s.focus_duration, 0);
-  const lastEmotion = emotionSamples[0]?.emotion || 'Unknown';
-  
-  const emotionData = emotionSamples.reduce((acc: any, curr) => {
-    const existing = acc.find((a: any) => a.name === curr.emotion);
-    if (existing) existing.value++;
-    else acc.push({ name: curr.emotion, value: 1 });
-    return acc;
-  }, []);
-
-  const COLORS = ['#8DE4D0', '#FFD4A3', '#B4B9FC', '#D1E9FF', '#FFF1E6', '#FFB7B7'];
 
   return (
     <div className="max-w-[1600px] mx-auto min-h-screen bg-[#f8fafc] flex flex-col lg:flex-row overflow-hidden">

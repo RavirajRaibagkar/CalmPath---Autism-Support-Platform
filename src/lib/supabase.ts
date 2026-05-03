@@ -60,7 +60,7 @@ export type FocusEvent = {
   child_id: string;
   session_id: string | null;
   event_type: 'tab_switch' | 'break_start' | 'break_end';
-  details: any;
+  metadata: any;
   created_at: string;
 };
 
